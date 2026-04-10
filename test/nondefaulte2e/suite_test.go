@@ -155,9 +155,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	err = (&argocdprovisioner.ReconcileArgoCD{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		K8sClient: k8sClient,
+		Client:     mgr.GetClient(),
+		Scheme:     mgr.GetScheme(),
+		K8sClient:  k8sClient,
 		LocalUsers: argocdprovisioner.NewLocalUsersInfo(),
 	}).SetupWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
