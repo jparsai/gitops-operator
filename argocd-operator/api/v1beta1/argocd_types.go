@@ -1496,6 +1496,11 @@ type PrincipalSpec struct {
 
 	// SelfRegistration defines the self-registration options for the Principal component.
 	SelfRegistration *PrincipalSelfRegistrationSpec `json:"selfRegistration,omitempty"`
+
+	// SPIFFE defines the SPIFFE/SPIRE configuration for the Principal component.
+	// When set, the operator injects the SPIRE Agent socket into the principal pod
+	// using the csi.spiffe.io CSI driver (provided by ZTWIM operator).
+	SPIFFE *PrincipalSPIFFESpec `json:"spiffe,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!has(self.enabled) || self.enabled == false || (has(self.clientCertSecretName) && self.clientCertSecretName != \"\")",message="clientCertSecretName must be set when self-registration is enabled"
@@ -1507,6 +1512,24 @@ type PrincipalSelfRegistrationSpec struct {
 	// ClientCertSecretName is the name of the TLS secret containing shared client cert
 	// for self-registered cluster secrets (must have tls.crt, tls.key, ca.crt).
 	ClientCertSecretName string `json:"clientCertSecretName,omitempty"`
+}
+
+// PrincipalSPIFFESpec defines the SPIFFE/SPIRE configuration for the Principal component.
+// The SPIRE socket is injected into the principal pod via the csi.spiffe.io CSI driver
+// (provided by the Zero Trust Workload Identity Manager / ZTWIM operator).
+// The principal uses the SPIRE Agent to obtain X.509 SVIDs (for server TLS) and
+// JWT bundle sources (for validating agent JWT-SVIDs).
+type PrincipalSPIFFESpec struct {
+	// SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
+	// The CSI driver mounts the parent directory of this path.
+	// Default: /run/spire/sockets/spire-agent.sock
+	SocketPath string `json:"socketPath,omitempty"`
+
+	// AuthMethod is the SPIFFE authentication method to use.
+	// Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
+	// or "mtls" (X.509-SVIDs, for centralized SPIRE).
+	// Default: "jwt"
+	AuthMethod string `json:"authMethod,omitempty"`
 }
 
 type PrincipalServerSpec struct {
@@ -1640,6 +1663,29 @@ type AgentSpec struct {
 
 	// Metrics defines the metrics configuration for the Agent ServiceMonitor.
 	Metrics *ArgoCDMetricsSpec `json:"metrics,omitempty"`
+
+	// SPIFFE defines the SPIFFE/SPIRE configuration for the Agent component.
+	// When set, the operator injects the SPIRE Agent socket into the agent pod
+	// using the csi.spiffe.io CSI driver (provided by ZTWIM operator).
+	// The agent uses the SPIRE Agent to obtain X.509 SVIDs for mTLS and
+	// JWT-SVIDs for authenticating to the principal.
+	SPIFFE *AgentSPIFFESpec `json:"spiffe,omitempty"`
+}
+
+// AgentSPIFFESpec defines the SPIFFE/SPIRE configuration for the Agent component.
+// The SPIRE socket is injected into the agent pod via the csi.spiffe.io CSI driver
+// (provided by the Zero Trust Workload Identity Manager / ZTWIM operator).
+type AgentSPIFFESpec struct {
+	// SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
+	// The CSI driver mounts the parent directory of this path.
+	// Default: /run/spire/sockets/spire-agent.sock
+	SocketPath string `json:"socketPath,omitempty"`
+
+	// AuthMethod is the SPIFFE authentication method to use.
+	// Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
+	// or "mtls" (X.509-SVIDs, for centralized SPIRE).
+	// Default: "jwt"
+	AuthMethod string `json:"authMethod,omitempty"`
 }
 
 type DestinationBasedMappingSpec struct {

@@ -13859,6 +13859,28 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
+                      spiffe:
+                        description: |-
+                          SPIFFE defines the SPIFFE/SPIRE configuration for the Agent component.
+                          When set, the operator injects the SPIRE Agent socket into the agent pod
+                          using the csi.spiffe.io CSI driver (provided by ZTWIM operator).
+                          The agent uses the SPIRE Agent to obtain X.509 SVIDs for mTLS and
+                          JWT-SVIDs for authenticating to the principal.
+                        properties:
+                          authMethod:
+                            description: |-
+                              AuthMethod is the SPIFFE authentication method to use.
+                              Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
+                              or "mtls" (X.509-SVIDs, for centralized SPIRE).
+                              Default: "jwt"
+                            type: string
+                          socketPath:
+                            description: |-
+                              SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
+                              The CSI driver mounts the parent directory of this path.
+                              Default: /run/spire/sockets/spire-agent.sock
+                            type: string
+                        type: object
                       tls:
                         description: TLS defines the TLS options for the Agent component.
                         properties:
@@ -14272,6 +14294,26 @@ spec:
                             required:
                             - type
                             type: object
+                        type: object
+                      spiffe:
+                        description: |-
+                          SPIFFE defines the SPIFFE/SPIRE configuration for the Principal component.
+                          When set, the operator injects the SPIRE Agent socket into the principal pod
+                          using the csi.spiffe.io CSI driver (provided by ZTWIM operator).
+                        properties:
+                          authMethod:
+                            description: |-
+                              AuthMethod is the SPIFFE authentication method to use.
+                              Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
+                              or "mtls" (X.509-SVIDs, for centralized SPIRE).
+                              Default: "jwt"
+                            type: string
+                          socketPath:
+                            description: |-
+                              SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
+                              The CSI driver mounts the parent directory of this path.
+                              Default: /run/spire/sockets/spire-agent.sock
+                            type: string
                         type: object
                       tls:
                         description: TLS defines the TLS options for the Principal
