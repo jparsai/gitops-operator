@@ -314,6 +314,21 @@ func updateDeploymentIfChanged(compName, saName string, cr *argoproj.ArgoCD, dep
 }
 
 func buildAgentContainerEnv(cr *argoproj.ArgoCD) []corev1.EnvVar {
+	// When SPIRE mTLS is configured, TLS is fully managed by SPIRE X.509-SVIDs.
+	// Clear the traditional TLS secret env vars to prevent the agent from attempting
+	// to load secret-based TLS certificates that do not exist in a SPIRE-only mTLS
+	// setup. The user can still override by explicitly setting TLS secrets in the CR.
+	tlsSecretName := getAgentTLSSecretName(cr)
+	tlsRootCASecretName := getAgentTLSRootCASecretName(cr)
+	if isAgentSpireMTLS(cr) {
+		if !hasTLS(cr) || cr.Spec.ArgoCDAgent.Agent.TLS.SecretName == "" {
+			tlsSecretName = ""
+		}
+		if !hasTLS(cr) || cr.Spec.ArgoCDAgent.Agent.TLS.RootCASecretName == "" {
+			tlsRootCASecretName = ""
+		}
+	}
+
 	env := []corev1.EnvVar{
 		{
 			Name:  EnvArgoCDAgentLogLevel,
@@ -337,7 +352,7 @@ func buildAgentContainerEnv(cr *argoproj.ArgoCD) []corev1.EnvVar {
 		},
 		{
 			Name:  EnvArgoCDAgentTLSSecretName,
-			Value: getAgentTLSSecretName(cr),
+			Value: tlsSecretName,
 		},
 		{
 			Name:  EnvArgoCDAgentTLSInsecure,
@@ -345,7 +360,7 @@ func buildAgentContainerEnv(cr *argoproj.ArgoCD) []corev1.EnvVar {
 		},
 		{
 			Name:  EnvArgoCDAgentTLSRootCASecretName,
-			Value: getAgentTLSRootCASecretName(cr),
+			Value: tlsRootCASecretName,
 		},
 		{
 			Name:  EnvArgoCDAgentMode,
@@ -616,6 +631,13 @@ func hasAgentSPIFFE(cr *argoproj.ArgoCD) bool {
 	return cr.Spec.ArgoCDAgent != nil &&
 		cr.Spec.ArgoCDAgent.Agent != nil &&
 		cr.Spec.ArgoCDAgent.Agent.SPIFFE != nil
+}
+
+// isAgentSpireMTLS returns true when the agent is configured to use SPIRE with mTLS
+// (X.509-SVID) authentication. In this mode TLS is fully managed by SPIRE and the
+// traditional secret-based TLS configuration must not interfere.
+func isAgentSpireMTLS(cr *argoproj.ArgoCD) bool {
+	return hasAgentSPIFFE(cr) && getAgentSpireAuthMethod(cr) == "mtls"
 }
 
 // getAgentSpireSocketPath returns the SPIRE Agent socket path for the agent.
