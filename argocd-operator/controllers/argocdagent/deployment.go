@@ -101,6 +101,15 @@ func buildDeployment(compName string, cr *argoproj.ArgoCD) *appsv1.Deployment {
 func buildPrincipalSpec(compName, saName string, cr *argoproj.ArgoCD, centralTLSProfile tlsProfile.TLSConfigProfile) appsv1.DeploymentSpec {
 	redisAuthVolume, redisAuthMount := argoutil.MountRedisAuthToArgo(cr)
 	envParams := buildPrincipalContainerEnv(cr, centralTLSProfile)
+
+	volumeMounts := append(buildVolumeMounts(), redisAuthMount)
+	volumes := append(buildVolumes(), redisAuthVolume)
+	if hasPrincipalSPIFFE(cr) {
+		socketDir := getPrincipalSpireSocketDir()
+		volumeMounts = append(volumeMounts, buildSpiffeVolumeMount(socketDir))
+		volumes = append(volumes, buildSpiffeVolume(getPrincipalSpiffeCSIDriver(cr)))
+	}
+
 	return appsv1.DeploymentSpec{
 		Selector: buildSelector(compName, cr),
 		Template: corev1.PodTemplateSpec{
@@ -117,12 +126,12 @@ func buildPrincipalSpec(compName, saName string, cr *argoproj.ArgoCD, centralTLS
 						Args:            buildArgs(compName),
 						SecurityContext: buildSecurityContext(),
 						Ports:           buildPorts(compName),
-						VolumeMounts:    append(buildVolumeMounts(), redisAuthMount),
+						VolumeMounts:    volumeMounts,
 						Resources:       getPrincipalResources(cr),
 					},
 				},
 				ServiceAccountName: saName,
-				Volumes:            append(buildVolumes(), redisAuthVolume),
+				Volumes:            volumes,
 				PriorityClassName:  cr.Spec.PriorityClassName,
 			},
 		},
@@ -295,6 +304,11 @@ func updateDeploymentIfChanged(compName, saName string, cr *argoproj.ArgoCD, dep
 	redisAuthVolume, redisAuthMount := argoutil.MountRedisAuthToArgo(cr)
 	desiredVolumeMounts := append(buildVolumeMounts(), redisAuthMount)
 	desiredVolumes := append(buildVolumes(), redisAuthVolume)
+	if hasPrincipalSPIFFE(cr) {
+		socketDir := getPrincipalSpireSocketDir()
+		desiredVolumeMounts = append(desiredVolumeMounts, buildSpiffeVolumeMount(socketDir))
+		desiredVolumes = append(desiredVolumes, buildSpiffeVolume(getPrincipalSpiffeCSIDriver(cr)))
+	}
 	if !reflect.DeepEqual(deployment.Spec.Template.Spec.Containers[0].VolumeMounts, desiredVolumeMounts) {
 		log.Info("deployment container volume mounts are being updated")
 		changed = true
@@ -428,6 +442,17 @@ func buildPrincipalContainerEnv(cr *argoproj.ArgoCD, centralTLSProfile tlsProfil
 		},
 	}
 
+	if hasPrincipalSPIFFE(cr) {
+		env = append(env, corev1.EnvVar{
+			Name:  EnvArgoCDPrincipalSpireAgentSocket,
+			Value: principalSpireSocketURI,
+		})
+		env = append(env, corev1.EnvVar{
+			Name:  EnvArgoCDPrincipalSpireAuthMethod,
+			Value: getPrincipalSpireAuthMethod(cr),
+		})
+	}
+
 	env = append(env, argoutil.GetRedisAuthEnv()...)
 
 	// Add custom environment variables if specified in the CR
@@ -469,7 +494,28 @@ const (
 	EnvArgoCDPrincipalEnableSelfClusterRegistration    = "ARGOCD_PRINCIPAL_ENABLE_SELF_CLUSTER_REGISTRATION"
 	EnvArgoCDPrincipalSelfRegistrationClientCertSecret = "ARGOCD_PRINCIPAL_SELF_REGISTRATION_CLIENT_CERT_SECRET"
 	EnvArgoCDPrincipalResourceProxyAddress             = "ARGOCD_PRINCIPAL_RESOURCE_PROXY_ADDRESS"
+	// EnvArgoCDPrincipalSpireAgentSocket is the UNIX socket URI for the SPIRE Agent.
+	// Set when SPIFFE/SPIRE is enabled via the csi.spiffe.io CSI driver (ZTWIM operator).
+	EnvArgoCDPrincipalSpireAgentSocket = "ARGOCD_PRINCIPAL_SPIRE_AGENT_SOCKET"
+	// EnvArgoCDPrincipalSpireAuthMethod is the SPIFFE authentication method for the principal.
+	// Required when SPIRE socket is set. Valid values: "jwt" or "mtls".
+	EnvArgoCDPrincipalSpireAuthMethod = "ARGOCD_PRINCIPAL_SPIRE_AUTH_METHOD"
 )
+
+// principalSpireSocketDir is the directory containing the SPIRE Agent socket injected by the csi.spiffe.io CSI driver.
+const principalSpireSocketDir = "/run/spire/sockets"
+
+// principalSpireSocketFile is the SPIRE Agent socket filename.
+const principalSpireSocketFile = "spire-agent.sock"
+
+// principalSpireSocketURI is the UNIX socket URI for the SPIRE Agent.
+const principalSpireSocketURI = "unix://" + principalSpireSocketDir + "/" + principalSpireSocketFile
+
+// defaultSpiffeCSIDriver is the default CSI driver name for SPIFFE workload API.
+const defaultSpiffeCSIDriver = "csi.spiffe.io"
+
+// spiffeWorkloadAPIVolumeName is the name used for the SPIFFE Workload API CSI volume.
+const spiffeWorkloadAPIVolumeName = "spiffe-workload-api"
 
 func getPrincipalTlsConfig(centralTLSProfile tlsProfile.TLSConfigProfile) map[string]string {
 	if centralTLSProfile.DisableClusterTLSProfile {
@@ -577,11 +623,49 @@ func getPrincipalJWTAllowGenerate(cr *argoproj.ArgoCD) string {
 	return "false"
 }
 
-// Authentication Configuration
-func getPrincipalAuth(cr *argoproj.ArgoCD) string {
-	if hasPrincipal(cr) && cr.Spec.ArgoCDAgent.Principal.Auth != "" {
-		return cr.Spec.ArgoCDAgent.Principal.Auth
+// getEffectivePrincipalAuth returns the auth configuration for the principal.
+// If auth is explicitly set, it returns that value.
+// If auth is empty but SPIFFE is configured, it returns the default SPIFFE JWT auth pattern
+// that expects SVID format: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
+func getEffectivePrincipalAuth(cr *argoproj.ArgoCD) string {
+	if cr.Spec.ArgoCDAgent == nil || cr.Spec.ArgoCDAgent.Principal == nil {
+		return ""
 	}
+
+	principal := cr.Spec.ArgoCDAgent.Principal
+
+	// If auth is explicitly set, use it
+	if principal.Auth != "" {
+		return principal.Auth
+	}
+
+	// If SPIFFE is configured but auth is not set, infer the default pattern
+	if principal.SPIFFE != nil {
+		authMethod := "jwt" // default
+		if principal.SPIFFE.AuthMethod != "" {
+			authMethod = principal.SPIFFE.AuthMethod
+		}
+
+		if authMethod == "jwt" {
+			// Default pattern: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
+			return "spiffe-jwt:spiffe://[^/]+/ns/[^/]+/argocd/agent/(.+)"
+		}
+		// For mtls, the auth pattern would be different (CN-based)
+		// We don't infer it here since mtls typically has custom patterns
+	}
+
+	return ""
+}
+
+// getPrincipalAuth returns the authentication configuration for the principal.
+// Uses getEffectivePrincipalAuth() which handles inference for SPIFFE configurations.
+// Falls back to mtls with CN pattern if neither explicit auth nor SPIFFE is configured.
+func getPrincipalAuth(cr *argoproj.ArgoCD) string {
+	auth := getEffectivePrincipalAuth(cr)
+	if auth != "" {
+		return auth
+	}
+	// Default fallback for non-SPIFFE configurations
 	return "mtls:CN=([^,]+)"
 }
 
@@ -723,4 +807,60 @@ func getPrincipalResourceProxyAddress(cr *argoproj.ArgoCD) string {
 	return fmt.Sprintf("%s:%d",
 		generateAgentResourceName(cr.Name, string(argoproj.AgentComponentTypePrincipal)+"-resource-proxy"),
 		PrincipalResourceProxyServicePort)
+}
+
+// hasPrincipalSPIFFE returns true when SPIFFE/SPIRE is configured for the principal.
+func hasPrincipalSPIFFE(cr *argoproj.ArgoCD) bool {
+	return cr.Spec.ArgoCDAgent != nil &&
+		cr.Spec.ArgoCDAgent.Principal != nil &&
+		cr.Spec.ArgoCDAgent.Principal.SPIFFE != nil
+}
+
+// getPrincipalSpireAuthMethod returns the SPIFFE auth method for the principal.
+// Defaults to "jwt" (JWT-SVIDs, for federated SPIRE) when not explicitly configured.
+// Valid values accepted by the binary: "jwt" or "mtls".
+func getPrincipalSpireAuthMethod(cr *argoproj.ArgoCD) string {
+	if hasPrincipalSPIFFE(cr) && cr.Spec.ArgoCDAgent.Principal.SPIFFE.AuthMethod != "" {
+		return cr.Spec.ArgoCDAgent.Principal.SPIFFE.AuthMethod
+	}
+	return "jwt"
+}
+
+// getPrincipalSpireSocketDir returns the directory containing the SPIRE Agent socket.
+// This is the path that the CSI driver mounts into the pod.
+func getPrincipalSpireSocketDir() string {
+	return principalSpireSocketDir
+}
+
+// getPrincipalSpiffeCSIDriver returns the CSI driver name for the principal.
+// Falls back to the default driver when none is configured.
+func getPrincipalSpiffeCSIDriver(cr *argoproj.ArgoCD) string {
+	if hasPrincipalSPIFFE(cr) && cr.Spec.ArgoCDAgent.Principal.SPIFFE.CSIDriverName != "" {
+		return cr.Spec.ArgoCDAgent.Principal.SPIFFE.CSIDriverName
+	}
+	return defaultSpiffeCSIDriver
+}
+
+// buildSpiffeVolumeMount returns a VolumeMount for the SPIFFE Workload API socket directory.
+func buildSpiffeVolumeMount(socketDir string) corev1.VolumeMount {
+	return corev1.VolumeMount{
+		Name:      spiffeWorkloadAPIVolumeName,
+		MountPath: socketDir,
+		ReadOnly:  true,
+	}
+}
+
+// buildSpiffeVolume returns a Volume backed by the csi.spiffe.io CSI driver.
+// The ZTWIM operator provisions this driver on each cluster node.
+func buildSpiffeVolume(driverName string) corev1.Volume {
+	readOnly := true
+	return corev1.Volume{
+		Name: spiffeWorkloadAPIVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			CSI: &corev1.CSIVolumeSource{
+				Driver:   driverName,
+				ReadOnly: &readOnly,
+			},
+		},
+	}
 }
