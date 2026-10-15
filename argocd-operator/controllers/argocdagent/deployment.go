@@ -105,8 +105,7 @@ func buildPrincipalSpec(compName, saName string, cr *argoproj.ArgoCD, centralTLS
 	volumeMounts := append(buildVolumeMounts(), redisAuthMount)
 	volumes := append(buildVolumes(), redisAuthVolume)
 	if hasPrincipalSPIFFE(cr) {
-		socketDir := getPrincipalSpireSocketDir()
-		volumeMounts = append(volumeMounts, buildSpiffeVolumeMount(socketDir))
+		volumeMounts = append(volumeMounts, buildSpiffeVolumeMount())
 		volumes = append(volumes, buildSpiffeVolume(getPrincipalSpiffeCSIDriver(cr)))
 	}
 
@@ -305,8 +304,8 @@ func updateDeploymentIfChanged(compName, saName string, cr *argoproj.ArgoCD, dep
 	desiredVolumeMounts := append(buildVolumeMounts(), redisAuthMount)
 	desiredVolumes := append(buildVolumes(), redisAuthVolume)
 	if hasPrincipalSPIFFE(cr) {
-		socketDir := getPrincipalSpireSocketDir()
-		desiredVolumeMounts = append(desiredVolumeMounts, buildSpiffeVolumeMount(socketDir))
+
+		desiredVolumeMounts = append(desiredVolumeMounts, buildSpiffeVolumeMount())
 		desiredVolumes = append(desiredVolumes, buildSpiffeVolume(getPrincipalSpiffeCSIDriver(cr)))
 	}
 	if !reflect.DeepEqual(deployment.Spec.Template.Spec.Containers[0].VolumeMounts, desiredVolumeMounts) {
@@ -826,12 +825,6 @@ func getPrincipalSpireAuthMethod(cr *argoproj.ArgoCD) string {
 	return "jwt"
 }
 
-// getPrincipalSpireSocketDir returns the directory containing the SPIRE Agent socket.
-// This is the path that the CSI driver mounts into the pod.
-func getPrincipalSpireSocketDir() string {
-	return principalSpireSocketDir
-}
-
 // getPrincipalSpiffeCSIDriver returns the CSI driver name for the principal.
 // Falls back to the default driver when none is configured.
 func getPrincipalSpiffeCSIDriver(cr *argoproj.ArgoCD) string {
@@ -842,10 +835,10 @@ func getPrincipalSpiffeCSIDriver(cr *argoproj.ArgoCD) string {
 }
 
 // buildSpiffeVolumeMount returns a VolumeMount for the SPIFFE Workload API socket directory.
-func buildSpiffeVolumeMount(socketDir string) corev1.VolumeMount {
+func buildSpiffeVolumeMount() corev1.VolumeMount {
 	return corev1.VolumeMount{
 		Name:      spiffeWorkloadAPIVolumeName,
-		MountPath: socketDir,
+		MountPath: principalSpireSocketDir,
 		ReadOnly:  true,
 	}
 }
