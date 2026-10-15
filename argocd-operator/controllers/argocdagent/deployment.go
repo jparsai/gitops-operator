@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -106,7 +105,7 @@ func buildPrincipalSpec(compName, saName string, cr *argoproj.ArgoCD, centralTLS
 	volumeMounts := append(buildVolumeMounts(), redisAuthMount)
 	volumes := append(buildVolumes(), redisAuthVolume)
 	if hasPrincipalSPIFFE(cr) {
-		socketDir := getPrincipalSpireSocketDir(cr)
+		socketDir := getPrincipalSpireSocketDir()
 		volumeMounts = append(volumeMounts, buildSpiffeVolumeMount(socketDir))
 		volumes = append(volumes, buildSpiffeVolume(getPrincipalSpiffeCSIDriver(cr)))
 	}
@@ -306,7 +305,7 @@ func updateDeploymentIfChanged(compName, saName string, cr *argoproj.ArgoCD, dep
 	desiredVolumeMounts := append(buildVolumeMounts(), redisAuthMount)
 	desiredVolumes := append(buildVolumes(), redisAuthVolume)
 	if hasPrincipalSPIFFE(cr) {
-		socketDir := getPrincipalSpireSocketDir(cr)
+		socketDir := getPrincipalSpireSocketDir()
 		desiredVolumeMounts = append(desiredVolumeMounts, buildSpiffeVolumeMount(socketDir))
 		desiredVolumes = append(desiredVolumes, buildSpiffeVolume(getPrincipalSpiffeCSIDriver(cr)))
 	}
@@ -446,7 +445,7 @@ func buildPrincipalContainerEnv(cr *argoproj.ArgoCD, centralTLSProfile tlsProfil
 	if hasPrincipalSPIFFE(cr) {
 		env = append(env, corev1.EnvVar{
 			Name:  EnvArgoCDPrincipalSpireAgentSocket,
-			Value: getPrincipalSpireAgentSocketURI(cr),
+			Value: principalSpireSocketURI,
 		})
 		env = append(env, corev1.EnvVar{
 			Name:  EnvArgoCDPrincipalSpireAuthMethod,
@@ -503,11 +502,14 @@ const (
 	EnvArgoCDPrincipalSpireAuthMethod = "ARGOCD_PRINCIPAL_SPIRE_AUTH_METHOD"
 )
 
-// principalSpireSocketPath is the fixed SPIRE Agent socket path injected by the csi.spiffe.io CSI driver.
-const principalSpireSocketPath = "/run/spire/sockets/spire-agent.sock"
+// principalSpireSocketDir is the directory containing the SPIRE Agent socket injected by the csi.spiffe.io CSI driver.
+const principalSpireSocketDir = "/run/spire/sockets"
+
+// principalSpireSocketFile is the SPIRE Agent socket filename.
+const principalSpireSocketFile = "spire-agent.sock"
 
 // principalSpireSocketURI is the UNIX socket URI for the SPIRE Agent.
-const principalSpireSocketURI = "unix:///run/spire/sockets/spire-agent.sock"
+const principalSpireSocketURI = "unix://" + principalSpireSocketDir + "/" + principalSpireSocketFile
 
 // defaultSpiffeCSIDriver is the default CSI driver name for SPIFFE workload API.
 const defaultSpiffeCSIDriver = "csi.spiffe.io"
@@ -621,11 +623,45 @@ func getPrincipalJWTAllowGenerate(cr *argoproj.ArgoCD) string {
 	return "false"
 }
 
+// getEffectivePrincipalAuth returns the auth configuration for the principal.
+// If auth is explicitly set, it returns that value.
+// If auth is empty but SPIFFE is configured, it returns the default SPIFFE JWT auth pattern
+// that expects SVID format: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
+func getEffectivePrincipalAuth(cr *argoproj.ArgoCD) string {
+	if cr.Spec.ArgoCDAgent == nil || cr.Spec.ArgoCDAgent.Principal == nil {
+		return ""
+	}
+
+	principal := cr.Spec.ArgoCDAgent.Principal
+
+	// If auth is explicitly set, use it
+	if principal.Auth != "" {
+		return principal.Auth
+	}
+
+	// If SPIFFE is configured but auth is not set, infer the default pattern
+	if principal.SPIFFE != nil {
+		authMethod := "jwt" // default
+		if principal.SPIFFE.AuthMethod != "" {
+			authMethod = principal.SPIFFE.AuthMethod
+		}
+
+		if authMethod == "jwt" {
+			// Default pattern: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
+			return "spiffe-jwt:spiffe://[^/]+/ns/[^/]+/argocd/agent/(.+)"
+		}
+		// For mtls, the auth pattern would be different (CN-based)
+		// We don't infer it here since mtls typically has custom patterns
+	}
+
+	return ""
+}
+
 // getPrincipalAuth returns the authentication configuration for the principal.
-// Uses GetEffectivePrincipalAuth() which handles inference for SPIFFE configurations.
+// Uses getEffectivePrincipalAuth() which handles inference for SPIFFE configurations.
 // Falls back to mtls with CN pattern if neither explicit auth nor SPIFFE is configured.
 func getPrincipalAuth(cr *argoproj.ArgoCD) string {
-	auth := cr.GetEffectivePrincipalAuth()
+	auth := getEffectivePrincipalAuth(cr)
 	if auth != "" {
 		return auth
 	}
@@ -780,16 +816,6 @@ func hasPrincipalSPIFFE(cr *argoproj.ArgoCD) bool {
 		cr.Spec.ArgoCDAgent.Principal.SPIFFE != nil
 }
 
-// getPrincipalSpireSocketPath returns the fixed SPIRE Agent socket path for the principal.
-func getPrincipalSpireSocketPath(cr *argoproj.ArgoCD) string {
-	return principalSpireSocketPath
-}
-
-// getPrincipalSpireAgentSocketURI returns the fixed UNIX socket URI for the SPIRE Agent.
-func getPrincipalSpireAgentSocketURI(cr *argoproj.ArgoCD) string {
-	return principalSpireSocketURI
-}
-
 // getPrincipalSpireAuthMethod returns the SPIFFE auth method for the principal.
 // Defaults to "jwt" (JWT-SVIDs, for federated SPIRE) when not explicitly configured.
 // Valid values accepted by the binary: "jwt" or "mtls".
@@ -802,8 +828,8 @@ func getPrincipalSpireAuthMethod(cr *argoproj.ArgoCD) string {
 
 // getPrincipalSpireSocketDir returns the directory containing the SPIRE Agent socket.
 // This is the path that the CSI driver mounts into the pod.
-func getPrincipalSpireSocketDir(cr *argoproj.ArgoCD) string {
-	return filepath.Dir(getPrincipalSpireSocketPath(cr))
+func getPrincipalSpireSocketDir() string {
+	return principalSpireSocketDir
 }
 
 // getPrincipalSpiffeCSIDriver returns the CSI driver name for the principal.
