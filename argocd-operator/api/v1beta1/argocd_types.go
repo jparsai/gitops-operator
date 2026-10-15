@@ -1882,4 +1882,3 @@ func (p *PromoterAPIServerSpec) IsEnabled() bool {
 func (p *PromoterControllerWebhookSpec) IsEnabled() bool {
 	return p != nil && p.Enabled != nil && *p.Enabled
 }
-
