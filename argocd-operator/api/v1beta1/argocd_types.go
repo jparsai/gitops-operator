@@ -1500,7 +1500,7 @@ type PrincipalSpec struct {
 	// SPIFFE defines the SPIFFE/SPIRE configuration for the Principal component.
 	// When set, the operator injects the SPIRE Agent socket into the principal pod
 	// using the csi.spiffe.io CSI driver (provided by ZTWIM operator).
-	SPIFFE *PrincipalSPIFFESpec `json:"spiffe,omitempty"`
+	SPIFFE *SPIFFESpec `json:"spiffe,omitempty"`
 }
 
 // +kubebuilder:validation:XValidation:rule="!has(self.enabled) || self.enabled == false || (has(self.clientCertSecretName) && self.clientCertSecretName != \"\")",message="clientCertSecretName must be set when self-registration is enabled"
@@ -1514,20 +1514,18 @@ type PrincipalSelfRegistrationSpec struct {
 	ClientCertSecretName string `json:"clientCertSecretName,omitempty"`
 }
 
-// PrincipalSPIFFESpec defines the SPIFFE/SPIRE configuration for the Principal component.
-// The SPIRE socket is injected into the principal pod via the csi.spiffe.io CSI driver
+// SPIFFESpec defines the SPIFFE/SPIRE configuration for ArgoCD components.
+// The SPIRE socket is injected into the pod via the csi.spiffe.io CSI driver
 // (provided by the Zero Trust Workload Identity Manager / ZTWIM operator).
-// The principal uses the SPIRE Agent to obtain X.509 SVIDs (for server TLS) and
-// JWT bundle sources (for validating agent JWT-SVIDs).
-type PrincipalSPIFFESpec struct {
-	// SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
-	// The CSI driver mounts the parent directory of this path.
-	// Default: /run/spire/sockets/spire-agent.sock
-	SocketPath string `json:"socketPath,omitempty"`
+// The socket path is fixed at /run/spire/sockets/spire-agent.sock and mounted by the CSI driver.
+// +k8s:openapi-gen=true
+type SPIFFESpec struct {
+	// CSIDriverName is the name of the CSI driver used to mount the SPIFFE workload API socket.
+	// Default: "csi.spiffe.io"
+	CSIDriverName string `json:"csiDriverName,omitempty"`
 
 	// AuthMethod is the SPIFFE authentication method to use.
-	// Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
-	// or "mtls" (X.509-SVIDs, for centralized SPIRE).
+	// Valid values: "jwt" (JWT-SVIDs, for federated SPIRE) or "mtls" (X.509-SVIDs, for centralized SPIRE).
 	// Default: "jwt"
 	AuthMethod string `json:"authMethod,omitempty"`
 }
@@ -1669,23 +1667,7 @@ type AgentSpec struct {
 	// using the csi.spiffe.io CSI driver (provided by ZTWIM operator).
 	// The agent uses the SPIRE Agent to obtain X.509 SVIDs for mTLS and
 	// JWT-SVIDs for authenticating to the principal.
-	SPIFFE *AgentSPIFFESpec `json:"spiffe,omitempty"`
-}
-
-// AgentSPIFFESpec defines the SPIFFE/SPIRE configuration for the Agent component.
-// The SPIRE socket is injected into the agent pod via the csi.spiffe.io CSI driver
-// (provided by the Zero Trust Workload Identity Manager / ZTWIM operator).
-type AgentSPIFFESpec struct {
-	// SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
-	// The CSI driver mounts the parent directory of this path.
-	// Default: /run/spire/sockets/spire-agent.sock
-	SocketPath string `json:"socketPath,omitempty"`
-
-	// AuthMethod is the SPIFFE authentication method to use.
-	// Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
-	// or "mtls" (X.509-SVIDs, for centralized SPIRE).
-	// Default: "jwt"
-	AuthMethod string `json:"authMethod,omitempty"`
+	SPIFFE *SPIFFESpec `json:"spiffe,omitempty"`
 }
 
 type DestinationBasedMappingSpec struct {
@@ -1908,4 +1890,38 @@ func (p *PromoterAPIServerSpec) IsEnabled() bool {
 
 func (p *PromoterControllerWebhookSpec) IsEnabled() bool {
 	return p != nil && p.Enabled != nil && *p.Enabled
+}
+
+// GetEffectivePrincipalAuth returns the auth configuration for the principal.
+// If auth is explicitly set, it returns that value.
+// If auth is empty but SPIFFE is configured, it returns the default SPIFFE JWT auth pattern
+// that expects SVID format: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
+func (a *ArgoCD) GetEffectivePrincipalAuth() string {
+	if a.Spec.ArgoCDAgent == nil || a.Spec.ArgoCDAgent.Principal == nil {
+		return ""
+	}
+
+	principal := a.Spec.ArgoCDAgent.Principal
+
+	// If auth is explicitly set, use it
+	if principal.Auth != "" {
+		return principal.Auth
+	}
+
+	// If SPIFFE is configured but auth is not set, infer the default pattern
+	if principal.SPIFFE != nil {
+		authMethod := "jwt" // default
+		if principal.SPIFFE.AuthMethod != "" {
+			authMethod = principal.SPIFFE.AuthMethod
+		}
+
+		if authMethod == "jwt" {
+			// Default pattern: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
+			return "spiffe-jwt:spiffe://[^/]+/ns/[^/]+/argocd/agent/(.+)"
+		}
+		// For mtls, the auth pattern would be different (CN-based)
+		// We don't infer it here since mtls typically has custom patterns
+	}
+
+	return ""
 }

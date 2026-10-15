@@ -105,7 +105,7 @@ func buildAgentSpec(compName, saName string, cr *argoproj.ArgoCD) appsv1.Deploym
 	if hasAgentSPIFFE(cr) {
 		socketDir := getAgentSpireSocketDir(cr)
 		volumeMounts = append(volumeMounts, buildSpiffeVolumeMount(socketDir))
-		volumes = append(volumes, buildSpiffeVolume())
+		volumes = append(volumes, buildSpiffeVolume(getAgentSpiffeCSIDriver(cr)))
 	}
 
 	return appsv1.DeploymentSpec{
@@ -265,7 +265,7 @@ func updateDeploymentIfChanged(compName, saName string, cr *argoproj.ArgoCD, dep
 	if hasAgentSPIFFE(cr) {
 		socketDir := getAgentSpireSocketDir(cr)
 		desiredVolumeMounts = append(desiredVolumeMounts, buildSpiffeVolumeMount(socketDir))
-		desiredVolumes = append(desiredVolumes, buildSpiffeVolume())
+		desiredVolumes = append(desiredVolumes, buildSpiffeVolume(getAgentSpiffeCSIDriver(cr)))
 	}
 	if !reflect.DeepEqual(deployment.Spec.Template.Spec.Containers[0].VolumeMounts, desiredVolumeMounts) {
 		log.Info("deployment container volume mounts are being updated")
@@ -461,8 +461,14 @@ const (
 	EnvArgoCDAgentSpireAuthMethod = "ARGOCD_AGENT_SPIRE_AUTH_METHOD"
 )
 
-// defaultAgentSpireSocketPath is the default SPIRE Agent socket path injected by the csi.spiffe.io CSI driver.
-const defaultAgentSpireSocketPath = "/run/spire/sockets/spire-agent.sock"
+// agentSpireSocketPath is the fixed SPIRE Agent socket path injected by the csi.spiffe.io CSI driver.
+const agentSpireSocketPath = "/run/spire/sockets/spire-agent.sock"
+
+// agentSpireSocketURI is the UNIX socket URI for the SPIRE Agent.
+const agentSpireSocketURI = "unix:///run/spire/sockets/spire-agent.sock"
+
+// defaultAgentSpiffeCSIDriver is the default CSI driver name for SPIFFE workload API.
+const defaultAgentSpiffeCSIDriver = "csi.spiffe.io"
 
 // agentSpiffeWorkloadAPIVolumeName is the name used for the SPIFFE Workload API CSI volume in agent pods.
 const agentSpiffeWorkloadAPIVolumeName = "spiffe-workload-api"
@@ -640,18 +646,14 @@ func isAgentSpireMTLS(cr *argoproj.ArgoCD) bool {
 	return hasAgentSPIFFE(cr) && getAgentSpireAuthMethod(cr) == "mtls"
 }
 
-// getAgentSpireSocketPath returns the SPIRE Agent socket path for the agent.
-// Falls back to the default path when none is configured.
+// getAgentSpireSocketPath returns the fixed SPIRE Agent socket path for the agent.
 func getAgentSpireSocketPath(cr *argoproj.ArgoCD) string {
-	if hasAgentSPIFFE(cr) && cr.Spec.ArgoCDAgent.Agent.SPIFFE.SocketPath != "" {
-		return cr.Spec.ArgoCDAgent.Agent.SPIFFE.SocketPath
-	}
-	return defaultAgentSpireSocketPath
+	return agentSpireSocketPath
 }
 
-// getAgentSpireAgentSocketURI returns the UNIX socket URI (unix://<path>) for the SPIRE Agent.
+// getAgentSpireAgentSocketURI returns the fixed UNIX socket URI for the SPIRE Agent.
 func getAgentSpireAgentSocketURI(cr *argoproj.ArgoCD) string {
-	return "unix://" + getAgentSpireSocketPath(cr)
+	return agentSpireSocketURI
 }
 
 // getAgentSpireAuthMethod returns the SPIFFE auth method for the agent.
@@ -670,6 +672,15 @@ func getAgentSpireSocketDir(cr *argoproj.ArgoCD) string {
 	return filepath.Dir(getAgentSpireSocketPath(cr))
 }
 
+// getAgentSpiffeCSIDriver returns the CSI driver name for the agent.
+// Falls back to the default driver when none is configured.
+func getAgentSpiffeCSIDriver(cr *argoproj.ArgoCD) string {
+	if hasAgentSPIFFE(cr) && cr.Spec.ArgoCDAgent.Agent.SPIFFE.CSIDriverName != "" {
+		return cr.Spec.ArgoCDAgent.Agent.SPIFFE.CSIDriverName
+	}
+	return defaultAgentSpiffeCSIDriver
+}
+
 // buildSpiffeVolumeMount returns a VolumeMount for the SPIFFE Workload API socket directory.
 func buildSpiffeVolumeMount(socketDir string) corev1.VolumeMount {
 	return corev1.VolumeMount{
@@ -681,13 +692,13 @@ func buildSpiffeVolumeMount(socketDir string) corev1.VolumeMount {
 
 // buildSpiffeVolume returns a Volume backed by the csi.spiffe.io CSI driver.
 // The ZTWIM operator provisions this driver on each cluster node.
-func buildSpiffeVolume() corev1.Volume {
+func buildSpiffeVolume(driverName string) corev1.Volume {
 	readOnly := true
 	return corev1.Volume{
 		Name: agentSpiffeWorkloadAPIVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			CSI: &corev1.CSIVolumeSource{
-				Driver:   "csi.spiffe.io",
+				Driver:   driverName,
 				ReadOnly: &readOnly,
 			},
 		},

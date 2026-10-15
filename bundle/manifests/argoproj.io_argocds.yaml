@@ -13870,15 +13870,13 @@ spec:
                           authMethod:
                             description: |-
                               AuthMethod is the SPIFFE authentication method to use.
-                              Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
-                              or "mtls" (X.509-SVIDs, for centralized SPIRE).
+                              Valid values: "jwt" (JWT-SVIDs, for federated SPIRE) or "mtls" (X.509-SVIDs, for centralized SPIRE).
                               Default: "jwt"
                             type: string
-                          socketPath:
+                          csiDriverName:
                             description: |-
-                              SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
-                              The CSI driver mounts the parent directory of this path.
-                              Default: /run/spire/sockets/spire-agent.sock
+                              CSIDriverName is the name of the CSI driver used to mount the SPIFFE workload API socket.
+                              Default: "csi.spiffe.io"
                             type: string
                         type: object
                       tls:
@@ -14304,15 +14302,13 @@ spec:
                           authMethod:
                             description: |-
                               AuthMethod is the SPIFFE authentication method to use.
-                              Required when SocketPath is set. Valid values: "jwt" (JWT-SVIDs, for federated SPIRE)
-                              or "mtls" (X.509-SVIDs, for centralized SPIRE).
+                              Valid values: "jwt" (JWT-SVIDs, for federated SPIRE) or "mtls" (X.509-SVIDs, for centralized SPIRE).
                               Default: "jwt"
                             type: string
-                          socketPath:
+                          csiDriverName:
                             description: |-
-                              SocketPath is the absolute path to the SPIRE Agent socket file inside the pod.
-                              The CSI driver mounts the parent directory of this path.
-                              Default: /run/spire/sockets/spire-agent.sock
+                              CSIDriverName is the name of the CSI driver used to mount the SPIFFE workload API socket.
+                              Default: "csi.spiffe.io"
                             type: string
                         type: object
                       tls:
