@@ -493,28 +493,24 @@ const (
 	EnvArgoCDPrincipalEnableSelfClusterRegistration    = "ARGOCD_PRINCIPAL_ENABLE_SELF_CLUSTER_REGISTRATION"
 	EnvArgoCDPrincipalSelfRegistrationClientCertSecret = "ARGOCD_PRINCIPAL_SELF_REGISTRATION_CLIENT_CERT_SECRET"
 	EnvArgoCDPrincipalResourceProxyAddress             = "ARGOCD_PRINCIPAL_RESOURCE_PROXY_ADDRESS"
-	// EnvArgoCDPrincipalSpireAgentSocket is the UNIX socket URI for the SPIRE Agent.
-	// Set when SPIFFE/SPIRE is enabled via the csi.spiffe.io CSI driver (ZTWIM operator).
-	EnvArgoCDPrincipalSpireAgentSocket = "ARGOCD_PRINCIPAL_SPIRE_AGENT_SOCKET"
-	// EnvArgoCDPrincipalSpireAuthMethod is the SPIFFE authentication method for the principal.
-	// Required when SPIRE socket is set. Valid values: "jwt" or "mtls".
-	EnvArgoCDPrincipalSpireAuthMethod = "ARGOCD_PRINCIPAL_SPIRE_AUTH_METHOD"
+	EnvArgoCDPrincipalSpireAgentSocket                 = "ARGOCD_PRINCIPAL_SPIRE_AGENT_SOCKET"
+	EnvArgoCDPrincipalSpireAuthMethod                  = "ARGOCD_PRINCIPAL_SPIRE_AUTH_METHOD"
+
+	// principalSpireSocketDir is the directory containing the SPIRE Agent socket injected by the csi.spiffe.io CSI driver.
+	principalSpireSocketDir = "/run/spire/sockets"
+
+	// principalSpireSocketFile is the SPIRE Agent socket filename.
+	principalSpireSocketFile = "spire-agent.sock"
+
+	// principalSpireSocketURI is the UNIX socket URI for the SPIRE Agent.
+	principalSpireSocketURI = "unix://" + principalSpireSocketDir + "/" + principalSpireSocketFile
+
+	// defaultSpiffeCSIDriver is the default CSI driver name for SPIFFE workload API.
+	defaultSpiffeCSIDriver = "csi.spiffe.io"
+
+	// spiffeWorkloadAPIVolumeName is the name used for the SPIFFE Workload API CSI volume.
+	spiffeWorkloadAPIVolumeName = "spiffe-workload-api"
 )
-
-// principalSpireSocketDir is the directory containing the SPIRE Agent socket injected by the csi.spiffe.io CSI driver.
-const principalSpireSocketDir = "/run/spire/sockets"
-
-// principalSpireSocketFile is the SPIRE Agent socket filename.
-const principalSpireSocketFile = "spire-agent.sock"
-
-// principalSpireSocketURI is the UNIX socket URI for the SPIRE Agent.
-const principalSpireSocketURI = "unix://" + principalSpireSocketDir + "/" + principalSpireSocketFile
-
-// defaultSpiffeCSIDriver is the default CSI driver name for SPIFFE workload API.
-const defaultSpiffeCSIDriver = "csi.spiffe.io"
-
-// spiffeWorkloadAPIVolumeName is the name used for the SPIFFE Workload API CSI volume.
-const spiffeWorkloadAPIVolumeName = "spiffe-workload-api"
 
 func getPrincipalTlsConfig(centralTLSProfile tlsProfile.TLSConfigProfile) map[string]string {
 	if centralTLSProfile.DisableClusterTLSProfile {
@@ -649,16 +645,11 @@ func getEffectivePrincipalAuth(cr *argoproj.ArgoCD) string {
 			// Default pattern: spiffe://<trust-domain>/ns/<namespace>/argocd/agent/<agent-name>
 			return "spiffe-jwt:spiffe://[^/]+/ns/[^/]+/argocd/agent/(.+)"
 		}
-		// For mtls, the auth pattern would be different (CN-based)
-		// We don't infer it here since mtls typically has custom patterns
 	}
 
 	return ""
 }
 
-// getPrincipalAuth returns the authentication configuration for the principal.
-// Uses getEffectivePrincipalAuth() which handles inference for SPIFFE configurations.
-// Falls back to mtls with CN pattern if neither explicit auth nor SPIFFE is configured.
 func getPrincipalAuth(cr *argoproj.ArgoCD) string {
 	auth := getEffectivePrincipalAuth(cr)
 	if auth != "" {
@@ -808,16 +799,13 @@ func getPrincipalResourceProxyAddress(cr *argoproj.ArgoCD) string {
 		PrincipalResourceProxyServicePort)
 }
 
-// hasPrincipalSPIFFE returns true when SPIFFE/SPIRE is configured for the principal.
+// SPIFFE Configuration
 func hasPrincipalSPIFFE(cr *argoproj.ArgoCD) bool {
 	return cr.Spec.ArgoCDAgent != nil &&
 		cr.Spec.ArgoCDAgent.Principal != nil &&
 		cr.Spec.ArgoCDAgent.Principal.SPIFFE != nil
 }
 
-// getPrincipalSpireAuthMethod returns the SPIFFE auth method for the principal.
-// Defaults to "jwt" (JWT-SVIDs, for federated SPIRE) when not explicitly configured.
-// Valid values accepted by the binary: "jwt" or "mtls".
 func getPrincipalSpireAuthMethod(cr *argoproj.ArgoCD) string {
 	if hasPrincipalSPIFFE(cr) && cr.Spec.ArgoCDAgent.Principal.SPIFFE.AuthMethod != "" {
 		return cr.Spec.ArgoCDAgent.Principal.SPIFFE.AuthMethod
@@ -825,8 +813,6 @@ func getPrincipalSpireAuthMethod(cr *argoproj.ArgoCD) string {
 	return "jwt"
 }
 
-// getPrincipalSpiffeCSIDriver returns the CSI driver name for the principal.
-// Falls back to the default driver when none is configured.
 func getPrincipalSpiffeCSIDriver(cr *argoproj.ArgoCD) string {
 	if hasPrincipalSPIFFE(cr) && cr.Spec.ArgoCDAgent.Principal.SPIFFE.CSIDriverName != "" {
 		return cr.Spec.ArgoCDAgent.Principal.SPIFFE.CSIDriverName
@@ -843,8 +829,7 @@ func buildSpiffeVolumeMount() corev1.VolumeMount {
 	}
 }
 
-// buildSpiffeVolume returns a Volume backed by the csi.spiffe.io CSI driver.
-// The ZTWIM operator provisions this driver on each cluster node.
+// buildSpiffeVolume returns a Volume backed by the SPIFFE CSI driver.
 func buildSpiffeVolume(driverName string) corev1.Volume {
 	readOnly := true
 	return corev1.Volume{
