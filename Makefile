@@ -152,6 +152,10 @@ get-image-updater-crd: ## Download Image Updater CRD.
 	@echo "downloading image updater crd"
 	@curl -sSLo config/crd/bases/argocd-image-updater.argoproj.io_imageupdaters.yaml https://raw.githubusercontent.com/argoproj-labs/argocd-image-updater/master/config/crd/bases/argocd-image-updater.argoproj.io_imageupdaters.yaml
 
+.PHONY: test-all
+test-all: manifests generate fmt vet ## Run all tests.
+	go test -timeout 2h ./... -coverprofile cover.out
+
 .PHONY: test
 test: manifests generate fmt vet ## Run unit tests.
 	cd argocd-operator && REDIS_CONFIG_PATH="$(shell pwd)/build/redis" go test $$(go list ./... | grep -E -v '/tests/ginkgo') -coverprofile cover.out
@@ -187,7 +191,7 @@ e2e-xks-tests-sequential-ginkgo: ginkgo ## Runs Ginkgo e2e sequential tests
 .PHONY: e2e-xks-tests-parallel-ginkgo ## Runs Ginkgo e2e parallel tests, (Defaults to 5 runs at a time)
 e2e-xks-tests-parallel-ginkgo: ginkgo
 	@echo "Running GitOps Operator parallel Ginkgo E2E tests..."
-	$(GINKGO_CLI) -p -vv -procs=5 --trace --label-filter=$(XKS_LABEL_FILTER) --no-color --timeout 300m --flake-attempts 2 -r ./test/openshift/e2e/ginkgo/parallel
+	$(GINKGO_CLI) -p -vv -procs=5 --trace --label-filter=$(XKS_LABEL_FILTER) --no-color --timeout 120m --flake-attempts 2 -r ./test/openshift/e2e/ginkgo/parallel
 
 ##@ Build
 
